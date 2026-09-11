@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 const STYLES = [
   { id: "punchier", label: "Punchier", color: "bg-rose-600 enabled:hover:bg-rose-700" },
@@ -15,14 +15,32 @@ export default function Home() {
   const [text, setText] = useState("");
   const [output, setOutput] = useState("");
   const [tweets, setTweets] = useState([]);
+  const [saved, setSaved] = useState([]);
+  const [panelOpen, setPanelOpen] = useState(false);
   const [activeStyle, setActiveStyle] = useState("");
   const [loading, setLoading] = useState(false);
+  const [savingText, setSavingText] = useState("");
   const [error, setError] = useState("");
   const [copied, setCopied] = useState(false);
 
   function tweetUrl(tweet) {
     return `https://twitter.com/intent/tweet?text=${encodeURIComponent(tweet)}`;
   }
+
+  function isSaved(tweet) {
+    return saved.some((item) => item.text === tweet);
+  }
+
+  useEffect(() => {
+    fetch("/api/saved")
+      .then((response) => response.json())
+      .then((data) => {
+        if (Array.isArray(data.tweets)) {
+          setSaved(data.tweets);
+        }
+      })
+      .catch(() => {});
+  }, []);
 
   async function remix(style) {
     if (!text.trim() || loading) return;
@@ -65,18 +83,64 @@ export default function Home() {
     setTimeout(() => setCopied(false), 1500);
   }
 
+  async function saveTweet(tweet) {
+    if (!tweet || isSaved(tweet) || savingText) return;
+
+    setSavingText(tweet);
+
+    try {
+      const response = await fetch("/api/saved", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text: tweet }),
+      });
+      const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.error || "Could not save tweet.");
+      }
+
+      setSaved((current) => {
+        if (current.some((item) => item.id === data.tweet.id)) {
+          return current;
+        }
+        return [data.tweet, ...current];
+      });
+      setPanelOpen(true);
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setSavingText("");
+    }
+  }
+
+  async function removeSaved(id) {
+    const response = await fetch(`/api/saved/${id}`, { method: "DELETE" });
+    if (!response.ok) return;
+    setSaved((current) => current.filter((item) => item.id !== id));
+  }
+
   return (
     <main className="mx-auto min-h-screen max-w-3xl px-5 py-12 sm:py-16">
-      <header className="mb-10">
-        <p className="mb-2 text-xs font-medium tracking-[0.2em] text-stone-500 uppercase">
-          Claude remix
-        </p>
-        <h1 className="font-serif text-5xl tracking-tight text-stone-900">
-          Remixer
-        </h1>
-        <p className="mt-3 max-w-md text-stone-600">
-          Paste text, pick a remix, and get a new version back.
-        </p>
+      <header className="mb-10 flex items-start justify-between gap-4">
+        <div>
+          <p className="mb-2 text-xs font-medium tracking-[0.2em] text-stone-500 uppercase">
+            Claude remix
+          </p>
+          <h1 className="font-serif text-5xl tracking-tight text-stone-900">
+            Remixer
+          </h1>
+          <p className="mt-3 max-w-md text-stone-600">
+            Paste text, pick a remix, and get a new version back.
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={() => setPanelOpen(true)}
+          className="shrink-0 rounded-full border border-stone-300 bg-white px-4 py-2 text-sm font-medium text-stone-700 transition hover:border-[#1DA1F2] hover:text-[#1DA1F2]"
+        >
+          Saved{saved.length ? ` (${saved.length})` : ""}
+        </button>
       </header>
 
       <section className="rounded-2xl border border-stone-200 bg-[#fffdf8] p-5 shadow-sm sm:p-6">
@@ -131,18 +195,32 @@ export default function Home() {
                 key={index}
                 className="rounded-xl border border-stone-200 bg-white px-3.5 py-3"
               >
-                <div className="mb-2 flex items-center justify-between">
+                <div className="mb-2 flex items-center justify-between gap-2">
                   <p className="text-xs font-medium tracking-wide text-[#1DA1F2] uppercase">
                     Tweet {index + 1}
                   </p>
-                  <a
-                    href={tweetUrl(tweet)}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="rounded-full bg-[#1DA1F2] px-3 py-1 text-sm font-medium text-white transition hover:bg-[#1a8cd8]"
-                  >
-                    Tweet
-                  </a>
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      disabled={isSaved(tweet) || savingText === tweet}
+                      onClick={() => saveTweet(tweet)}
+                      className="rounded-full border border-stone-300 px-3 py-1 text-sm font-medium text-stone-700 transition hover:border-stone-900 disabled:cursor-not-allowed disabled:opacity-40"
+                    >
+                      {isSaved(tweet)
+                        ? "Saved"
+                        : savingText === tweet
+                          ? "Saving…"
+                          : "Save"}
+                    </button>
+                    <a
+                      href={tweetUrl(tweet)}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="rounded-full bg-[#1DA1F2] px-3 py-1 text-sm font-medium text-white transition hover:bg-[#1a8cd8]"
+                    >
+                      Tweet
+                    </a>
+                  </div>
                 </div>
                 <p className="whitespace-pre-wrap text-stone-900">{tweet}</p>
               </article>
@@ -160,6 +238,71 @@ export default function Home() {
           </div>
         )}
       </section>
+
+      {panelOpen && (
+        <button
+          type="button"
+          aria-label="Close saved tweets"
+          onClick={() => setPanelOpen(false)}
+          className="fixed inset-0 z-30 bg-stone-900/20"
+        />
+      )}
+
+      <aside
+        className={`fixed top-0 right-0 z-40 flex h-full w-full max-w-sm flex-col border-l border-stone-200 bg-[#fffdf8] shadow-xl transition-transform duration-200 ${
+          panelOpen ? "translate-x-0" : "translate-x-full"
+        }`}
+      >
+        <div className="flex items-center justify-between border-b border-stone-200 px-5 py-4">
+          <div>
+            <h2 className="font-serif text-2xl text-stone-900">Saved tweets</h2>
+            <p className="text-sm text-stone-500">
+              {saved.length ? `${saved.length} ready to post later` : "Save tweets from a remix"}
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={() => setPanelOpen(false)}
+            className="text-sm text-stone-500 transition hover:text-stone-900"
+          >
+            Close
+          </button>
+        </div>
+
+        <div className="flex-1 space-y-3 overflow-y-auto p-5">
+          {saved.length === 0 ? (
+            <p className="text-sm text-stone-500">
+              Nothing saved yet. Generate tweets, then hit Save on the ones you like.
+            </p>
+          ) : (
+            saved.map((item) => (
+              <article
+                key={item.id}
+                className="rounded-xl border border-stone-200 bg-white px-3.5 py-3"
+              >
+                <p className="whitespace-pre-wrap text-stone-900">{item.text}</p>
+                <div className="mt-3 flex items-center justify-between">
+                  <button
+                    type="button"
+                    onClick={() => removeSaved(item.id)}
+                    className="text-sm text-stone-500 transition hover:text-red-700"
+                  >
+                    Remove
+                  </button>
+                  <a
+                    href={tweetUrl(item.text)}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="rounded-full bg-[#1DA1F2] px-3 py-1 text-sm font-medium text-white transition hover:bg-[#1a8cd8]"
+                  >
+                    Tweet
+                  </a>
+                </div>
+              </article>
+            ))
+          )}
+        </div>
+      </aside>
     </main>
   );
 }
